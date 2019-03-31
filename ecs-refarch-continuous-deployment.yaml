@@ -1,0 +1,126 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+
+
+Description: >
+  This template shows how to use AWS CodePipeline and AWS CodeBuild to build an
+  automated continuous deployment pipeline to Amazon Elastic Container Service
+  (Amazon ECS) using clusters powered by AWS Fargate or Amazon Elastic Compute
+  Cloud (Amazon EC2).
+
+
+Parameters:
+  LaunchType:
+    Type: String
+    Default: Fargate
+    AllowedValues:
+      - Fargate
+      - EC2
+    Description: >
+      The launch type for your service. Selecting EC2 will create an Auto
+      Scaling group of t2.micro instances for your cluster. See
+      https://docs.aws.amazon.com/AmazonECS/latest/developerguide/launch_types.html
+      to learn more about launch types.
+
+  S3BucketName:
+    Type: String
+    Default: hello-world-subbi
+    Description: Your bucketname of image or jar file.
+
+  SourceS3Key:
+    Type: String
+    Default: hellworld-app/Main.zip
+    Description: The key name of the S3 source bucket.
+
+  TemplateBucket:
+    Type: String
+    Default: ecs-refarch-continuous-deployment
+    Description: >
+      The S3 bucket from which to fetch the templates used by this stack.
+
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterLabels:
+      S3BucketName:
+        default: "hello-world-subbi"
+      SourceS3Key:
+        default: "hellworld-app/Main.zip"
+      LaunchType:
+        default: "Launch Type"
+    ParameterGroups:
+      - Label:
+          default: Cluster Configuration
+        Parameters:
+          - LaunchType
+      - Label:
+          default: S3 Source configuration
+        Parameters:
+          - S3BucketName
+          - SourceS3Key
+      - Label:
+          default: Stack Configuration
+        Parameters:
+          - TemplateBucket
+
+
+Resources:
+  Cluster:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.amazonaws.com/${TemplateBucket}/templates/ecs-cluster.yaml"
+      Parameters:
+        LaunchType: !Ref LaunchType
+        SourceSecurityGroup: !GetAtt LoadBalancer.Outputs.SecurityGroup
+        Subnets: !GetAtt VPC.Outputs.Subnets
+        VpcId: !GetAtt VPC.Outputs.VpcId
+
+  DeploymentPipeline:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.amazonaws.com/${TemplateBucket}/templates/deployment-pipeline.yaml"
+      Parameters:
+        Cluster: !GetAtt Cluster.Outputs.ClusterName
+        Service: !GetAtt Service.Outputs.Service
+        S3BucketName: !Ref S3BucketName
+        SourceS3Key: !Ref SourceS3Key
+
+  LoadBalancer:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.amazonaws.com/${TemplateBucket}/templates/load-balancer.yaml"
+      Parameters:
+        LaunchType: !Ref LaunchType
+        Subnets: !GetAtt VPC.Outputs.Subnets
+        VpcId: !GetAtt VPC.Outputs.VpcId
+
+  VPC:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.amazonaws.com/${TemplateBucket}/templates/vpc.yaml"
+      Parameters:
+        Name: !Ref AWS::StackName
+        VpcCIDR: 10.215.0.0/16
+        Subnet1CIDR: 10.215.10.0/24
+        Subnet2CIDR: 10.215.20.0/24
+
+  Service:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "https://s3.amazonaws.com/${TemplateBucket}/templates/service.yaml"
+      Parameters:
+        Cluster: !GetAtt Cluster.Outputs.ClusterName
+        LaunchType: !Ref LaunchType
+        TargetGroup: !GetAtt LoadBalancer.Outputs.TargetGroup
+        SourceSecurityGroup: !GetAtt LoadBalancer.Outputs.SecurityGroup
+        Subnets: !GetAtt VPC.Outputs.Subnets
+
+
+Outputs:
+  ServiceUrl:
+    Description: The sample service that is being continuously deployed.
+    Value: !GetAtt LoadBalancer.Outputs.ServiceUrl
+
+  PipelineUrl:
+    Description: The continuous deployment pipeline in the AWS Management Console.
+    Value: !GetAtt DeploymentPipeline.Outputs.PipelineUrl
